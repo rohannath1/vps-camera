@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visitor Photo — Webcam</title>
+<!-- Webcam window for the Visitor Pass System.
+     Host this file on any HTTPS site (GitHub Pages, your own server).
+     It is opened as a pop-up by the Apps Script app and sends the photo back
+     with postMessage. Nothing is uploaded or stored by this page. -->
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #1E272E; color: #FFF; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center; padding: 14px; gap: 12px; }
+  h1 { font-size: 16px; font-weight: 600; opacity: .9; }
+  .stage { position: relative; width: 100%; max-width: 420px; aspect-ratio: 3 / 4; background: #000; border-radius: 10px; overflow: hidden; }
+  video, img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  video.mirror { transform: scaleX(-1); }
+  .guide { position: absolute; inset: 14% 18% 22%; border: 3px dashed rgba(255,255,255,.55); border-radius: 50% / 45%; pointer-events: none; }
+  .msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; font-size: 14px; line-height: 1.6; }
+  .row { display: flex; gap: 8px; width: 100%; max-width: 420px; }
+  button { flex: 1; padding: 13px; border: none; border-radius: 7px; font-size: 15px; font-weight: 700; color: #FFF; cursor: pointer; }
+  .g { background: #27AE60; } .s { background: #7F8C8D; flex: 0 0 64px; } .r { background: #95A5A6; }
+  select { width: 100%; max-width: 420px; padding: 8px; border-radius: 6px; border: none; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1>📷 Visitor photo</h1>
+  <select id="devices" style="display:none"></select>
+  <div class="stage">
+    <video id="v" playsinline autoplay muted></video>
+    <img id="shot" alt="" style="display:none">
+    <div class="guide" id="guide"></div>
+    <div class="msg" id="msg">Starting webcam… click <b>&nbsp;Allow&nbsp;</b> if the browser asks.</div>
+  </div>
+  <div class="row" id="live"><button class="s" id="flip" title="Switch camera">🔄</button><button class="g" id="snap">📸 Capture</button></div>
+  <div class="row" id="review" style="display:none"><button class="r" id="retake">↺ Retake</button><button class="g" id="use">✔ Use photo</button></div>
+
+<script>
+(function() {
+  var $ = function(id) { return document.getElementById(id); };
+  var params = new URLSearchParams(location.search);
+  var facing = params.get('facing') === 'environment' ? 'environment' : 'user';
+  var stream = null, shot = '', deviceId = '';
+
+  if (!window.opener) {
+    $('msg').innerHTML = 'This window is opened from the Visitor Pass app.<br>Open it from the 📷 Photo button there.';
+  }
+
+  function stop() { if (stream) { stream.getTracks().forEach(function(t) { t.stop(); }); stream = null; } }
+
+  function start() {
+    stop();
+    $('msg').style.display = 'flex';
+    var video = deviceId ? { deviceId: { exact: deviceId } } : { facingMode: facing };
+    video.width = { ideal: 960 }; video.height = { ideal: 1280 };
+    navigator.mediaDevices.getUserMedia({ video: video, audio: false }).then(function(s) {
+      stream = s;
+      $('v').srcObject = s; $('v').play();
+      $('v').classList.toggle('mirror', facing === 'user' && !deviceId);
+      $('msg').style.display = 'none';
+      listDevices();
+    }).catch(function(e) {
+      $('msg').textContent = e.name === 'NotAllowedError'
+        ? 'Camera access was blocked. Click the camera icon in the address bar → Allow, then reload this window.'
+        : 'No webcam found or it is in use by another app (' + e.name + ').';
+    });
+  }
+
+  function listDevices() {
+    navigator.mediaDevices.enumerateDevices().then(function(list) {
+      var cams = list.filter(function(d) { return d.kind === 'videoinput'; });
+      var sel = $('devices');
+      if (cams.length < 2) { sel.style.display = 'none'; return; }
+      sel.innerHTML = cams.map(function(c, i) {
+        return '<option value="' + c.deviceId + '">' + (c.label || 'Camera ' + (i + 1)) + '</option>';
+      }).join('');
+      var cur = stream && stream.getVideoTracks()[0] && stream.getVideoTracks()[0].getSettings().deviceId;
+      if (cur) sel.value = cur;
+      sel.style.display = 'block';
+    });
+  }
+  $('devices').onchange = function() { deviceId = this.value; start(); };
+
+  /** Same output as the app: 360x480 JPEG, 3:4 centre crop. */
+  function toJpeg(src, sw, sh, mirror) {
+    var W = 360, H = 480, ratio = 3 / 4, cw = sw, ch = sw / ratio;
+    if (ch > sh) { ch = sh; cw = sh * ratio; }
+    var c = document.createElement('canvas'); c.width = W; c.height = H;
+    var g = c.getContext('2d');
+    if (mirror) { g.translate(W, 0); g.scale(-1, 1); }
+    g.drawImage(src, (sw - cw) / 2, (sh - ch) / 2, cw, ch, 0, 0, W, H);
+    return c.toDataURL('image/jpeg', 0.8);
+  }
+
+  $('snap').onclick = function() {
+    var v = $('v'); if (!stream || !v.videoWidth) return;
+    shot = toJpeg(v, v.videoWidth, v.videoHeight, v.classList.contains('mirror'));
+    stop();
+    $('shot').src = shot; $('shot').style.display = 'block'; $('v').style.display = 'none'; $('guide').style.display = 'none';
+    $('live').style.display = 'none'; $('review').style.display = 'flex';
+  };
+  $('retake').onclick = function() {
+    $('shot').style.display = 'none'; $('v').style.display = 'block'; $('guide').style.display = 'block';
+    $('live').style.display = 'flex'; $('review').style.display = 'none'; start();
+  };
+  $('flip').onclick = function() { deviceId = ''; facing = facing === 'user' ? 'environment' : 'user'; start(); };
+  $('use').onclick = function() {
+    if (!window.opener) { alert('The app window was closed. Open the camera again from the app.'); return; }
+    // Photo goes only to the window that opened this one; the app checks this page's origin.
+    window.opener.postMessage({ type: 'vps-photo', dataUrl: shot }, '*');
+    stop(); window.close();
+  };
+  window.addEventListener('beforeunload', stop);
+  start();
+})();
+</script>
+</body>
+</html>
