@@ -42,6 +42,50 @@
   var params = new URLSearchParams(location.search);
   var facing = params.get('facing') === 'environment' ? 'environment' : 'user';
   var stream = null, shot = '', deviceId = '';
+  var SCAN = params.get('mode') === 'scan', scanTimer = null, detector = null, done = false;
+  if (SCAN) {
+    document.title = 'Scan QR — Webcam';
+    document.querySelector('h1').textContent = '🔳 Hold the QR code up to the camera';
+    $('snap').style.display = 'none';
+    $('guide').style.inset = '18% 12%'; $('guide').style.borderRadius = '12px';
+    if (!params.get('facing')) facing = 'user';
+  }
+
+  function loadJsQR(cb) {
+    if (window.jsQR) return cb();
+    var sc = document.createElement('script');
+    sc.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+    sc.integrity = 'sha384-b5Ya4Bq3qCyz39m2ISh+4DxjAIljdeFwK/BsXLuj9gugaNwAcj/ia15fxNZL9Nlx';
+    sc.crossOrigin = 'anonymous'; sc.onload = cb; sc.onerror = cb;
+    document.head.appendChild(sc);
+  }
+
+  function found(text) {
+    if (done) return; done = true;
+    clearInterval(scanTimer);
+    $('msg').style.display = 'flex'; $('msg').textContent = '✔ Scanned';
+    try { var a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(); o.frequency.value = 1200; o.connect(a.destination); o.start(); o.stop(a.currentTime + 0.12); } catch (e) {}
+    if (window.opener) window.opener.postMessage({ type: 'vps-scan', text: String(text) }, '*');
+    setTimeout(function() { stop(); window.close(); }, 400);
+  }
+
+  function startScan() {
+    if ('BarcodeDetector' in window) { try { detector = new BarcodeDetector({ formats: ['qr_code'] }); } catch (e) { detector = null; } }
+    loadJsQR(function() {
+      var c = document.createElement('canvas'), g = c.getContext('2d', { willReadFrequently: true });
+      clearInterval(scanTimer);
+      scanTimer = setInterval(function() {
+        var v = $('v'); if (!stream || !v.videoWidth || done) return;
+        if (detector) { detector.detect(v).then(function(r) { if (r && r.length) found(r[0].rawValue); }).catch(function() {}); return; }
+        if (!window.jsQR) return;
+        var sc = Math.min(1, 800 / Math.max(v.videoWidth, v.videoHeight));
+        c.width = Math.round(v.videoWidth * sc); c.height = Math.round(v.videoHeight * sc);
+        g.drawImage(v, 0, 0, c.width, c.height);
+        var r = window.jsQR(g.getImageData(0, 0, c.width, c.height).data, c.width, c.height, { inversionAttempts: 'attemptBoth' });
+        if (r && r.data) found(r.data);
+      }, 200);
+    });
+  }
 
   if (!window.opener) {
     $('msg').innerHTML = 'This window is opened from the Visitor Pass app.<br>Open it from the 📷 Photo button there.';
@@ -60,6 +104,7 @@
       $('v').classList.toggle('mirror', facing === 'user' && !deviceId);
       $('msg').style.display = 'none';
       listDevices();
+      if (SCAN) startScan();
     }).catch(function(e) {
       $('msg').textContent = e.name === 'NotAllowedError'
         ? 'Camera access was blocked. Click the camera icon in the address bar → Allow, then reload this window.'
